@@ -47,10 +47,16 @@ saveMessages(messagesByRoom);
 
 // Create HTTP server to serve static files
 const server = http.createServer((req, res) => {
-    let filePath = '.' + req.url;
-    if (filePath === './') {
-        filePath = './index.html';
+    // Parse URL and remove query parameters (split on '?')
+    let filePath = req.url.split('?')[0];
+    
+    // Handle root path
+    if (filePath === '/' || filePath === '') {
+        filePath = '/index.html';
     }
+    
+    // Remove leading slash and add current directory
+    filePath = '.' + filePath;
 
     const extname = String(path.extname(filePath)).toLowerCase();
     const mimeTypes = {
@@ -65,8 +71,21 @@ const server = http.createServer((req, res) => {
     fs.readFile(filePath, (error, content) => {
         if (error) {
             if (error.code === 'ENOENT') {
-                res.writeHead(404, { 'Content-Type': 'text/html' });
-                res.end('<h1>404 - File Not Found</h1>', 'utf-8');
+                // For SPA behavior, serve index.html for any non-file request
+                if (!extname || extname === '') {
+                    fs.readFile('./index.html', (err, htmlContent) => {
+                        if (err) {
+                            res.writeHead(404, { 'Content-Type': 'text/html' });
+                            res.end('<h1>404 - File Not Found</h1>', 'utf-8');
+                        } else {
+                            res.writeHead(200, { 'Content-Type': 'text/html' });
+                            res.end(htmlContent, 'utf-8');
+                        }
+                    });
+                } else {
+                    res.writeHead(404, { 'Content-Type': 'text/html' });
+                    res.end('<h1>404 - File Not Found</h1>', 'utf-8');
+                }
             } else {
                 res.writeHead(500);
                 res.end(`Server Error: ${error.code}`, 'utf-8');
