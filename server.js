@@ -134,10 +134,18 @@ wss.on('connection', (ws, req) => {
                 }
                 
                 const messageData = {
-                    text: message.text,
+                    messageType: message.messageType || 'text',
                     deviceId: message.deviceId,
                     timestamp: message.timestamp || Date.now()
                 };
+                
+                // Store text or file data
+                if (message.messageType === 'text' || !message.messageType) {
+                    messageData.text = message.text;
+                } else {
+                    messageData.fileData = message.fileData;
+                    messageData.fileName = message.fileName;
+                }
                 
                 messagesByRoom[roomName].push(messageData);
                 
@@ -154,12 +162,21 @@ wss.on('connection', (ws, req) => {
                     if (id !== deviceId && 
                         client.currentRoom === roomName && 
                         client.ws.readyState === WebSocket.OPEN) {
-                        client.ws.send(JSON.stringify({
+                        const broadcastMessage = {
                             type: 'message',
-                            message: messageData.text,
+                            messageType: messageData.messageType,
                             deviceId: message.deviceId,
                             roomName: roomName
-                        }));
+                        };
+                        
+                        if (messageData.messageType === 'text' || !messageData.messageType) {
+                            broadcastMessage.message = messageData.text;
+                        } else {
+                            broadcastMessage.fileData = messageData.fileData;
+                            broadcastMessage.fileName = messageData.fileName;
+                        }
+                        
+                        client.ws.send(JSON.stringify(broadcastMessage));
                     }
                 });
             }

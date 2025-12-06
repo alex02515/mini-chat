@@ -28,6 +28,8 @@ const reconnectDelay = 3000;
 const chatMessages = document.getElementById('chatMessages');
 const messageInput = document.getElementById('messageInput');
 const sendButton = document.getElementById('sendButton');
+const fileInput = document.getElementById('fileInput');
+const attachButton = document.getElementById('attachButton');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
 const currentChatTitle = document.getElementById('currentChatTitle');
@@ -81,6 +83,46 @@ messageInput.addEventListener('keydown', function(e) {
 
 // Send button click
 sendButton.addEventListener('click', sendMessage);
+
+// File upload handler
+attachButton.addEventListener('click', () => {
+    fileInput.click();
+});
+
+fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) {
+        handleFileUpload(file);
+        // Reset input so same file can be selected again
+        fileInput.value = '';
+    }
+});
+
+// Handle file upload
+function handleFileUpload(file) {
+    // Check file size (limit to 10MB for videos, 5MB for images)
+    const maxSize = file.type.startsWith('video/') ? 10 * 1024 * 1024 : 5 * 1024 * 1024;
+    if (file.size > maxSize) {
+        alert(`File is too large. Maximum size: ${maxSize / (1024 * 1024)}MB`);
+        return;
+    }
+    
+    const reader = new FileReader();
+    
+    reader.onload = function(e) {
+        const fileData = e.target.result;
+        const fileType = file.type.startsWith('image/') ? 'image' : 'video';
+        
+        sendFileMessage(fileData, fileType, file.name);
+    };
+    
+    reader.onerror = function() {
+        alert('Error reading file. Please try again.');
+    };
+    
+    // Read as data URL (base64)
+    reader.readAsDataURL(file);
+}
 
 // Connect to WebSocket server
 function connect() {
@@ -158,8 +200,12 @@ function handleMessage(data) {
     if (data.type === 'message') {
         // Only show message if it's for the current room
         if (data.roomName === roomName) {
-            addMessage(data.message, data.deviceId !== deviceId);
-            saveMessageToLocal(data.message, data.deviceId !== deviceId, roomName);
+            const messageContent = data.messageType === 'text' 
+                ? { type: 'text', content: data.message }
+                : { type: data.messageType, content: data.fileData, fileName: data.fileName };
+            
+            addMessage(messageContent, data.deviceId !== deviceId);
+            saveMessageToLocal(messageContent, data.deviceId !== deviceId, roomName);
         }
     } else if (data.type === 'history') {
         // Clear existing messages when history is received
@@ -168,7 +214,11 @@ function handleMessage(data) {
         // Load message history
         if (data.messages && data.messages.length > 0) {
             data.messages.forEach(msg => {
-                addMessage(msg.text, msg.deviceId !== deviceId, false);
+                const messageContent = msg.messageType === 'text' || !msg.messageType
+                    ? { type: 'text', content: msg.text || msg.message }
+                    : { type: msg.messageType, content: msg.fileData, fileName: msg.fileName };
+                
+                addMessage(messageContent, msg.deviceId !== deviceId, false);
             });
         } else {
             // Try to load from localStorage
@@ -180,7 +230,7 @@ function handleMessage(data) {
     }
 }
 
-// Send message
+// Send text message
 function sendMessage() {
     const text = messageInput.value.trim();
     if (!text || !ws || ws.readyState !== WebSocket.OPEN) {
@@ -191,6 +241,7 @@ function sendMessage() {
     
     const message = {
         type: 'message',
+        messageType: 'text',
         text: text,
         deviceId: deviceId,
         roomName: roomName,
@@ -201,8 +252,8 @@ function sendMessage() {
     ws.send(JSON.stringify(message));
     
     // Add to UI immediately (optimistic update)
-    addMessage(text, false);
-    saveMessageToLocal(text, false, roomName);
+    addMessage({ type: 'text', content: text }, false);
+    saveMessageToLocal({ type: 'text', content: text }, false, roomName);
     
     // Clear input
     messageInput.value = '';
@@ -210,8 +261,35 @@ function sendMessage() {
     sendButton.disabled = true;
 }
 
+// Send file message
+function sendFileMessage(fileData, fileType, fileName) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        alert('Not connected to server. Please wait...');
+        return;
+    }
+    
+    const roomName = getCurrentRoom();
+    
+    const message = {
+        type: 'message',
+        messageType: fileType,
+        fileData: fileData,
+        fileName: fileName,
+        deviceId: deviceId,
+        roomName: roomName,
+        timestamp: Date.now()
+    };
+    
+    // Send to server
+    ws.send(JSON.stringify(message));
+    
+    // Add to UI immediately (optimistic update)
+    addMessage({ type: fileType, content: fileData, fileName: fileName }, false);
+    saveMessageToLocal({ type: fileType, content: fileData, fileName: fileName }, false, roomName);
+}
+
 // Add message to chat
-function addMessage(text, isReceived, animate = true) {
+function addMessage(messageContent, isReceived, animate = true) {
     // Remove empty state if present
     const emptyState = chatMessages.querySelector('.empty-state');
     if (emptyState) {
@@ -226,7 +304,25 @@ function addMessage(text, isReceived, animate = true) {
     
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
-    bubble.textContent = text;
+    
+    // Handle different message types
+    if (messageContent.type === 'text') {
+        bubble.textContent = messageContent.content;
+    } else if (messageContent.type === 'image') {
+        const img = document.createElement('img');
+        img.src = messageContent.content;
+        img.className = 'message-media';
+        img.alt = messageContent.fileName || 'Image';
+        img.loading = 'lazy';
+        bubble.appendChild(img);
+    } else if (messageContent.type === 'video') {
+        const video = document.createElement('video');
+        video.src = messageContent.content;
+        video.className = 'message-media';
+        video.controls = true;
+        video.preload = 'metadata';
+        bubble.appendChild(video);
+    }
     
     const time = document.createElement('div');
     time.className = 'message-time';
@@ -256,14 +352,24 @@ function updateStatus(status, text) {
 }
 
 // Save message to localStorage (per room)
-function saveMessageToLocal(text, isReceived, roomName) {
+function saveMessageToLocal(messageContent, isReceived, roomName) {
     const storageKey = `messages_${roomName}`;
     const messages = JSON.parse(localStorage.getItem(storageKey) || '[]');
-    messages.push({
-        text: text,
+    
+    const messageToSave = {
+        type: messageContent.type,
         deviceId: isReceived ? 'other' : deviceId,
         timestamp: Date.now()
-    });
+    };
+    
+    if (messageContent.type === 'text') {
+        messageToSave.text = messageContent.content;
+    } else {
+        messageToSave.fileData = messageContent.content;
+        messageToSave.fileName = messageContent.fileName;
+    }
+    
+    messages.push(messageToSave);
     
     // Keep only last 100 messages per room
     if (messages.length > 100) {
@@ -279,7 +385,11 @@ function loadMessagesFromLocal(roomName) {
     const messages = JSON.parse(localStorage.getItem(storageKey) || '[]');
     if (messages.length > 0) {
         messages.forEach(msg => {
-            addMessage(msg.text, msg.deviceId !== deviceId, false);
+            const messageContent = msg.type === 'text' || !msg.type
+                ? { type: 'text', content: msg.text }
+                : { type: msg.type, content: msg.fileData, fileName: msg.fileName };
+            
+            addMessage(messageContent, msg.deviceId !== deviceId, false);
         });
     } else {
         showEmptyState();
