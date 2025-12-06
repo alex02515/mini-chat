@@ -20,15 +20,26 @@
     --border-radius-small: 12px;
 }
 
+html {
+    height: 100%;
+    height: 100dvh; /* Dynamic viewport height for mobile */
+    overflow: hidden;
+}
+
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    height: 100vh;
+    height: 100%;
+    height: 100dvh; /* Dynamic viewport height for mobile */
     display: flex;
     justify-content: center;
     align-items: center;
     padding: 10px;
     overflow: hidden;
+    position: fixed;
+    width: 100%;
+    top: 0;
+    left: 0;
 }
 
 .chat-container {
@@ -43,14 +54,18 @@ body {
     flex-direction: column;
     overflow: hidden;
     position: relative;
+    /* Mobile-safe height */
+    min-height: 0;
 }
 
 .chat-header {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     padding: 20px;
+    padding-top: max(20px, env(safe-area-inset-top));
     color: white;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
     z-index: 10;
+    flex-shrink: 0;
 }
 
 .header-content {
@@ -97,14 +112,19 @@ body {
 }
 
 .chat-messages {
-    flex: 1;
+    flex: 1 1 auto;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 20px;
     display: flex;
     flex-direction: column;
     gap: 12px;
     scroll-behavior: smooth;
     min-height: 0;
+    /* Enable momentum scrolling on iOS */
+    -webkit-overflow-scrolling: touch;
+    /* Prevent text selection issues on mobile */
+    -webkit-tap-highlight-color: transparent;
 }
 
 .chat-messages::-webkit-scrollbar {
@@ -187,12 +207,15 @@ body {
 
 .chat-input-container {
     padding: 16px;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
     background: white;
     border-top: 1px solid rgba(0, 0, 0, 0.1);
     box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
     flex-shrink: 0;
     position: relative;
     z-index: 100;
+    /* Ensure it's always visible */
+    min-height: fit-content;
 }
 
 .input-wrapper {
@@ -282,37 +305,59 @@ body {
     font-size: 16px;
 }
 
-/* Responsive design */
+/* Responsive design - Mobile */
 @media (max-width: 768px) {
+    html {
+        height: 100dvh; /* Use dynamic viewport height */
+        height: 100vh; /* Fallback for older browsers */
+        height: calc(var(--vh, 1vh) * 100); /* JS-controlled height */
+    }
+    
     body {
         padding: 0;
-        height: 100vh;
+        height: 100dvh; /* Use dynamic viewport height */
+        height: 100vh; /* Fallback for older browsers */
+        height: calc(var(--vh, 1vh) * 100); /* JS-controlled height */
         overflow: hidden;
+        align-items: stretch; /* Stretch to fill */
     }
     
     .chat-container {
         max-width: 100%;
         max-height: 100%;
         border-radius: 0;
-        height: 100vh;
-        min-height: 100vh;
+        height: 100%;
+        height: 100dvh; /* Use dynamic viewport height */
+        height: calc(var(--vh, 1vh) * 100); /* JS-controlled height */
+        min-height: 0;
+        /* Ensure proper flex layout */
+        display: flex;
+        flex-direction: column;
     }
     
     .chat-header {
         border-radius: 0;
         flex-shrink: 0;
+        padding-top: max(20px, env(safe-area-inset-top));
     }
     
     .chat-messages {
-        flex: 1;
+        flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
+        overflow-x: hidden;
+        /* Enable momentum scrolling on iOS */
+        -webkit-overflow-scrolling: touch;
     }
     
     .chat-input-container {
         flex-shrink: 0;
+        flex-grow: 0;
         position: relative;
         z-index: 100;
+        padding-bottom: max(16px, env(safe-area-inset-bottom));
+        /* Ensure it stays at bottom */
+        margin-top: auto;
     }
     
     .message {
@@ -340,10 +385,16 @@ body {
     
     .chat-input-container {
         padding: 12px;
+        padding-bottom: max(12px, env(safe-area-inset-bottom));
     }
     
     .input-wrapper {
         padding: 6px 6px 6px 12px;
+    }
+    
+    .chat-header {
+        padding: 16px;
+        padding-top: max(16px, env(safe-area-inset-top));
     }
 }
 

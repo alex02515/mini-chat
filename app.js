@@ -24,6 +24,19 @@ messageInput.addEventListener('input', function() {
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
 });
 
+// Ensure input is visible when focused on mobile
+messageInput.addEventListener('focus', function() {
+    if (window.innerWidth <= 768) {
+        // Small delay to let keyboard appear
+        setTimeout(() => {
+            const inputContainer = document.querySelector('.chat-input-container');
+            if (inputContainer) {
+                inputContainer.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            }
+        }, 300);
+    }
+});
+
 // Send message on Enter (Shift+Enter for new line)
 messageInput.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -260,6 +273,50 @@ messageInput.addEventListener('input', function() {
         sendButton.title = '';
     }
 });
+
+// Mobile viewport fix for iOS Safari
+function setMobileViewportHeight() {
+    if (window.innerWidth <= 768) {
+        const vh = window.innerHeight * 0.01;
+        document.documentElement.style.setProperty('--vh', `${vh}px`);
+        
+        // Also set the chat container height
+        const chatContainer = document.querySelector('.chat-container');
+        if (chatContainer) {
+            chatContainer.style.height = `${window.innerHeight}px`;
+        }
+    }
+}
+
+// Set initial viewport height
+setMobileViewportHeight();
+
+// Update on resize (handles Safari address bar show/hide)
+let resizeTimer;
+window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(setMobileViewportHeight, 100);
+});
+
+// Update on orientation change
+window.addEventListener('orientationchange', () => {
+    setTimeout(setMobileViewportHeight, 500);
+});
+
+// Prevent iOS bounce scrolling on body (only when not in messages area)
+document.body.addEventListener('touchmove', (e) => {
+    // Allow scrolling in messages area and input
+    if (e.target.closest('.chat-messages') || 
+        e.target.closest('.chat-input-container') ||
+        e.target.closest('#messageInput')) {
+        return;
+    }
+    // Prevent bounce scrolling on body
+    if (document.body.scrollTop === 0 || 
+        document.body.scrollTop + document.body.clientHeight >= document.body.scrollHeight) {
+        e.preventDefault();
+    }
+}, { passive: false });
 
 // Initialize connection status
 updateStatus('disconnected', 'Connecting...');
