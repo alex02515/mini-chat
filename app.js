@@ -15,6 +15,9 @@ const sendButton = document.getElementById('sendButton');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
 
+// Initialize send button as disabled
+sendButton.disabled = true;
+
 // Auto-resize textarea
 messageInput.addEventListener('input', function() {
     this.style.height = 'auto';
@@ -35,9 +38,21 @@ sendButton.addEventListener('click', sendMessage);
 // Connect to WebSocket server
 function connect() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Use the same port as the HTTP server (8080) or current port if different
-    const port = window.location.port || '8080';
-    const wsUrl = `${protocol}//${window.location.hostname}:${port}`;
+    // On Render, use the same hostname and port (Render handles routing)
+    // For localhost, use the port
+    let wsUrl;
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        const port = window.location.port || '8080';
+        wsUrl = `${protocol}//${window.location.hostname}:${port}`;
+    } else {
+        // Production (Render) - use same hostname and port as HTTP
+        // Render routes WebSocket upgrades through the same port
+        const host = window.location.host; // This includes port if present
+        wsUrl = `${protocol}//${host}`;
+    }
+    
+    console.log('Connecting to WebSocket:', wsUrl);
+    updateStatus('disconnected', 'Connecting...');
     
     try {
         ws = new WebSocket(wsUrl);
@@ -46,6 +61,11 @@ function connect() {
             console.log('Connected to server');
             reconnectAttempts = 0;
             updateStatus('connected', 'Connected');
+            
+            // Re-enable send button if there's text
+            if (messageInput.value.trim()) {
+                sendButton.disabled = false;
+            }
             
             // Send device identification
             ws.send(JSON.stringify({
@@ -66,20 +86,24 @@ function connect() {
         
         ws.onerror = function(error) {
             console.error('WebSocket error:', error);
-            updateStatus('disconnected', 'Connection error');
+            // Don't update status on error - let onclose handle it
+            // This prevents showing "Disconnected" prematurely
         };
         
-        ws.onclose = function() {
-            console.log('Disconnected from server');
-            updateStatus('disconnected', 'Disconnected');
+        ws.onclose = function(event) {
+            console.log('Disconnected from server', event.code, event.reason);
+            // Only show disconnected if it wasn't a clean close or we've exhausted reconnects
+            if (reconnectAttempts >= maxReconnectAttempts) {
+                updateStatus('disconnected', 'Connection failed. Please refresh.');
+            } else {
+                updateStatus('disconnected', 'Reconnecting...');
+            }
             ws = null;
             
             // Attempt to reconnect
             if (reconnectAttempts < maxReconnectAttempts) {
                 reconnectAttempts++;
                 setTimeout(connect, reconnectDelay);
-            } else {
-                statusText.textContent = 'Connection failed. Please refresh.';
             }
         };
     } catch (error) {
@@ -225,18 +249,31 @@ function showEmptyState() {
 
 // Enable/disable send button based on input
 messageInput.addEventListener('input', function() {
-    sendButton.disabled = !this.value.trim() || !ws || ws.readyState !== WebSocket.OPEN;
+    const hasText = this.value.trim().length > 0;
+    const isConnected = ws && ws.readyState === WebSocket.OPEN;
+    sendButton.disabled = !hasText || !isConnected;
+    
+    // If not connected, show that we're waiting
+    if (!isConnected && hasText) {
+        sendButton.title = 'Waiting for connection...';
+    } else {
+        sendButton.title = '';
+    }
 });
+
+// Initialize connection status
+updateStatus('disconnected', 'Connecting...');
 
 // Initialize
 connect();
 
 // Show empty state initially if no messages
-if (chatMessages.children.length === 0) {
-    setTimeout(() => {
+setTimeout(() => {
+    if (chatMessages.children.length === 0) {
+        loadMessagesFromLocal();
         if (chatMessages.children.length === 0) {
             showEmptyState();
         }
-    }, 1000);
-}
+    }
+}, 500);
 
