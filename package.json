@@ -1,0 +1,21 @@
+{
+  "name": "private-messenger",
+  "version": "1.0.0",
+  "description": "A simple private messenger for two devices",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "messenger",
+    "chat",
+    "websocket"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.14.2"
+  }
+}
+
