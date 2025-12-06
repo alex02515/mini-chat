@@ -2,55 +2,20 @@
 const deviceId = localStorage.getItem('deviceId') || `device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 localStorage.setItem('deviceId', deviceId);
 
-// Chat/Room management
-let currentRoom = 'Chat 1';
-let chatList = [];
-
-// Load chat list from localStorage
-function loadChatList() {
-    const saved = localStorage.getItem('chatList');
-    if (saved) {
-        chatList = JSON.parse(saved);
-    } else {
-        // Initialize with default chats
-        chatList = ['Chat 1', 'Chat 2', 'Chat 3'];
-        saveChatList();
+// Get room name from URL parameter
+function getRoomFromURL() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const room = urlParams.get('room');
+    // Sanitize room name (alphanumeric, dash, underscore only)
+    if (room) {
+        return room.replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 50) || null;
     }
-    
-    // Load current room from localStorage
-    const savedRoom = localStorage.getItem('currentRoom');
-    if (savedRoom && chatList.includes(savedRoom)) {
-        currentRoom = savedRoom;
-    }
+    return null;
 }
 
-function saveChatList() {
-    localStorage.setItem('chatList', JSON.stringify(chatList));
-}
-
-function addChat(chatName) {
-    if (!chatList.includes(chatName)) {
-        chatList.push(chatName);
-        saveChatList();
-        renderChatList();
-    }
-}
-
-function removeChat(chatName) {
-    if (chatList.length <= 1) {
-        alert('You must have at least one chat!');
-        return;
-    }
-    if (chatName === currentRoom) {
-        // Switch to first available chat
-        const otherChats = chatList.filter(c => c !== chatName);
-        if (otherChats.length > 0) {
-            switchToChat(otherChats[0]);
-        }
-    }
-    chatList = chatList.filter(c => c !== chatName);
-    saveChatList();
-    renderChatList();
+// Get current room name (always reads from URL)
+function getCurrentRoom() {
+    return getRoomFromURL();
 }
 
 // WebSocket connection
@@ -65,13 +30,27 @@ const messageInput = document.getElementById('messageInput');
 const sendButton = document.getElementById('sendButton');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
-const chatListContainer = document.getElementById('chatListContainer');
-const chatListElement = document.getElementById('chatList');
-const newChatButton = document.getElementById('newChatButton');
 const currentChatTitle = document.getElementById('currentChatTitle');
 
 // Initialize send button as disabled
 sendButton.disabled = true;
+
+// Check if room parameter exists
+const currentRoom = getCurrentRoom();
+if (!currentRoom) {
+    // Show placeholder message
+    document.body.innerHTML = `
+        <div style="display: flex; align-items: center; justify-content: center; height: 100vh; text-align: center; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+            <div>
+                <h1 style="font-size: 24px; margin-bottom: 16px; color: #333;">No Room Specified</h1>
+                <p style="font-size: 16px; color: #666; max-width: 400px;">
+                    Please open this app using a chat link with <code style="background: #f0f0f0; padding: 2px 6px; border-radius: 4px;">?room=roomName</code>
+                </p>
+            </div>
+        </div>
+    `;
+    throw new Error('No room parameter');
+}
 
 // Auto-resize textarea
 messageInput.addEventListener('input', function() {
@@ -106,27 +85,15 @@ sendButton.addEventListener('click', sendMessage);
 // Connect to WebSocket server
 function connect() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // On Render, use the same hostname and port (Render handles routing)
-    // For localhost, use the port
-    let wsUrl;
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-        const port = window.location.port || '8080';
-        wsUrl = `${protocol}//${window.location.hostname}:${port}`;
-    } else {
-        // Production (Render) - use same hostname and port as HTTP
-        // Render routes WebSocket upgrades through the same port
-        const host = window.location.host; // This includes port if present
-        wsUrl = `${protocol}//${host}`;
-    }
+    // Use window.location.origin and replace http/https with ws/wss
+    const wsUrl = `${protocol}//${window.location.host}`;
     
-    console.log('Connecting to WebSocket:', wsUrl);
     updateStatus('disconnected', 'Connecting...');
     
     try {
         ws = new WebSocket(wsUrl);
         
         ws.onopen = function() {
-            console.log('Connected to server');
             reconnectAttempts = 0;
             updateStatus('connected', 'Connected');
             
@@ -136,16 +103,17 @@ function connect() {
             }
             
             // Send device identification with current room
+            const roomName = getCurrentRoom();
             ws.send(JSON.stringify({
                 type: 'register',
                 deviceId: deviceId,
-                roomName: currentRoom
+                roomName: roomName
             }));
             
             // Request message history for current room
             ws.send(JSON.stringify({
                 type: 'getHistory',
-                roomName: currentRoom
+                roomName: roomName
             }));
         };
         
@@ -155,13 +123,10 @@ function connect() {
         };
         
         ws.onerror = function(error) {
-            console.error('WebSocket error:', error);
             // Don't update status on error - let onclose handle it
-            // This prevents showing "Disconnected" prematurely
         };
         
         ws.onclose = function(event) {
-            console.log('Disconnected from server', event.code, event.reason);
             // Only show disconnected if it wasn't a clean close or we've exhausted reconnects
             if (reconnectAttempts >= maxReconnectAttempts) {
                 updateStatus('disconnected', 'Connection failed. Please refresh.');
@@ -177,7 +142,6 @@ function connect() {
             }
         };
     } catch (error) {
-        console.error('Failed to connect:', error);
         updateStatus('disconnected', 'Connection failed');
         
         // Show offline mode message
@@ -189,11 +153,13 @@ function connect() {
 
 // Handle incoming messages
 function handleMessage(data) {
+    const roomName = getCurrentRoom();
+    
     if (data.type === 'message') {
         // Only show message if it's for the current room
-        if (data.roomName === currentRoom) {
+        if (data.roomName === roomName) {
             addMessage(data.message, data.deviceId !== deviceId);
-            saveMessageToLocal(data.message, data.deviceId !== deviceId, currentRoom);
+            saveMessageToLocal(data.message, data.deviceId !== deviceId, roomName);
         }
     } else if (data.type === 'history') {
         // Clear existing messages when history is received
@@ -206,7 +172,7 @@ function handleMessage(data) {
             });
         } else {
             // Try to load from localStorage
-            loadMessagesFromLocal(currentRoom);
+            loadMessagesFromLocal(roomName);
             if (chatMessages.children.length === 0) {
                 showEmptyState();
             }
@@ -221,11 +187,13 @@ function sendMessage() {
         return;
     }
     
+    const roomName = getCurrentRoom();
+    
     const message = {
         type: 'message',
         text: text,
         deviceId: deviceId,
-        roomName: currentRoom,
+        roomName: roomName,
         timestamp: Date.now()
     };
     
@@ -234,7 +202,7 @@ function sendMessage() {
     
     // Add to UI immediately (optimistic update)
     addMessage(text, false);
-    saveMessageToLocal(text, false, currentRoom);
+    saveMessageToLocal(text, false, roomName);
     
     // Clear input
     messageInput.value = '';
@@ -268,8 +236,10 @@ function addMessage(text, isReceived, animate = true) {
     messageDiv.appendChild(time);
     chatMessages.appendChild(messageDiv);
     
-    // Scroll to bottom
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    // Scroll to bottom immediately
+    requestAnimationFrame(() => {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    });
 }
 
 // Format time
@@ -316,85 +286,13 @@ function loadMessagesFromLocal(roomName) {
     }
 }
 
-// Switch to a different chat
-function switchToChat(roomName) {
-    if (roomName === currentRoom) return;
-    
-    // Save current room
-    localStorage.setItem('currentRoom', roomName);
-    
-    // Update current room
-    currentRoom = roomName;
-    
-    // Update UI
-    currentChatTitle.textContent = roomName;
-    chatMessages.innerHTML = '';
-    
-    // Update chat list highlighting
-    renderChatList();
-    
-    // Join the new room on server
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-            type: 'joinRoom',
-            roomName: roomName
-        }));
-    } else {
-        // If not connected, load from localStorage
-        loadMessagesFromLocal(roomName);
-        if (chatMessages.children.length === 0) {
-            showEmptyState();
-        }
+// Update header to show room name
+function updateRoomDisplay() {
+    const roomName = getCurrentRoom();
+    if (currentChatTitle && roomName) {
+        currentChatTitle.textContent = roomName;
     }
 }
-
-// Render chat list
-function renderChatList() {
-    chatListElement.innerHTML = '';
-    
-    chatList.forEach(chatName => {
-        const chatItem = document.createElement('div');
-        chatItem.className = `chat-item ${chatName === currentRoom ? 'active' : ''}`;
-        chatItem.innerHTML = `
-            <span class="chat-item-name">${chatName}</span>
-            ${chatList.length > 1 ? '<button class="chat-item-delete" aria-label="Delete chat">×</button>' : ''}
-        `;
-        
-        chatItem.addEventListener('click', (e) => {
-            if (!e.target.classList.contains('chat-item-delete')) {
-                switchToChat(chatName);
-            }
-        });
-        
-        const deleteBtn = chatItem.querySelector('.chat-item-delete');
-        if (deleteBtn) {
-            deleteBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (confirm(`Delete "${chatName}"?`)) {
-                    removeChat(chatName);
-                }
-            });
-        }
-        
-        chatListElement.appendChild(chatItem);
-    });
-}
-
-// Handle new chat button
-newChatButton.addEventListener('click', () => {
-    const chatNumber = chatList.length + 1;
-    let newChatName = `Chat ${chatNumber}`;
-    
-    // Make sure name is unique
-    let counter = 1;
-    while (chatList.includes(newChatName)) {
-        newChatName = `Chat ${chatNumber + counter}`;
-        counter++;
-    }
-    
-    addChat(newChatName);
-    switchToChat(newChatName);
-});
 
 // Show empty state
 function showEmptyState() {
@@ -467,12 +365,8 @@ document.body.addEventListener('touchmove', (e) => {
     }
 }, { passive: false });
 
-// Initialize chat list
-loadChatList();
-renderChatList();
-
-// Set initial chat title
-currentChatTitle.textContent = currentRoom;
+// Update room display
+updateRoomDisplay();
 
 // Initialize connection status
 updateStatus('disconnected', 'Connecting...');
@@ -483,7 +377,8 @@ connect();
 // Show empty state initially if no messages
 setTimeout(() => {
     if (chatMessages.children.length === 0) {
-        loadMessagesFromLocal(currentRoom);
+        const roomName = getCurrentRoom();
+        loadMessagesFromLocal(roomName);
         if (chatMessages.children.length === 0) {
             showEmptyState();
         }

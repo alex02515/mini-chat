@@ -96,23 +96,6 @@ wss.on('connection', (ws, req) => {
                 deviceId = message.deviceId;
                 currentRoom = message.roomName || 'default';
                 clients.set(deviceId, { ws, currentRoom });
-                console.log(`Device connected: ${deviceId} to room: ${currentRoom}`);
-            } else if (message.type === 'joinRoom') {
-                // Client wants to switch rooms
-                const oldRoom = currentRoom;
-                currentRoom = message.roomName || 'default';
-                if (clients.has(deviceId)) {
-                    clients.get(deviceId).currentRoom = currentRoom;
-                }
-                console.log(`Device ${deviceId} switched from ${oldRoom} to ${currentRoom}`);
-                
-                // Send message history for the new room
-                const roomMessages = messagesByRoom[currentRoom] || [];
-                ws.send(JSON.stringify({
-                    type: 'history',
-                    roomName: currentRoom,
-                    messages: roomMessages.slice(-50) // Send last 50 messages
-                }));
             } else if (message.type === 'getHistory') {
                 // Send message history for current room
                 const roomName = message.roomName || currentRoom;
@@ -160,8 +143,6 @@ wss.on('connection', (ws, req) => {
                         }));
                     }
                 });
-
-                console.log(`Message from ${message.deviceId} in room ${roomName}: ${message.text}`);
             }
         } catch (error) {
             console.error('Error handling message:', error);
@@ -171,20 +152,17 @@ wss.on('connection', (ws, req) => {
     ws.on('close', () => {
         if (deviceId) {
             clients.delete(deviceId);
-            console.log(`Device disconnected: ${deviceId}`);
         }
     });
 
     ws.on('error', (error) => {
-        console.error('WebSocket error:', error);
+        // Silent error handling
     });
 });
 
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
-    console.log(`\n🚀 Private Messenger Server running on:`);
-    console.log(`   http://localhost:${PORT}`);
-    console.log(`\n📱 Open this URL on both your laptop and phone!\n`);
+    console.log(`Server running on port ${PORT}`);
 });
 
 
