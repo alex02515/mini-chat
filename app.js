@@ -2,6 +2,57 @@
 const deviceId = localStorage.getItem('deviceId') || `device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 localStorage.setItem('deviceId', deviceId);
 
+// Chat/Room management
+let currentRoom = 'Chat 1';
+let chatList = [];
+
+// Load chat list from localStorage
+function loadChatList() {
+    const saved = localStorage.getItem('chatList');
+    if (saved) {
+        chatList = JSON.parse(saved);
+    } else {
+        // Initialize with default chats
+        chatList = ['Chat 1', 'Chat 2', 'Chat 3'];
+        saveChatList();
+    }
+    
+    // Load current room from localStorage
+    const savedRoom = localStorage.getItem('currentRoom');
+    if (savedRoom && chatList.includes(savedRoom)) {
+        currentRoom = savedRoom;
+    }
+}
+
+function saveChatList() {
+    localStorage.setItem('chatList', JSON.stringify(chatList));
+}
+
+function addChat(chatName) {
+    if (!chatList.includes(chatName)) {
+        chatList.push(chatName);
+        saveChatList();
+        renderChatList();
+    }
+}
+
+function removeChat(chatName) {
+    if (chatList.length <= 1) {
+        alert('You must have at least one chat!');
+        return;
+    }
+    if (chatName === currentRoom) {
+        // Switch to first available chat
+        const otherChats = chatList.filter(c => c !== chatName);
+        if (otherChats.length > 0) {
+            switchToChat(otherChats[0]);
+        }
+    }
+    chatList = chatList.filter(c => c !== chatName);
+    saveChatList();
+    renderChatList();
+}
+
 // WebSocket connection
 let ws = null;
 let reconnectAttempts = 0;
@@ -14,6 +65,10 @@ const messageInput = document.getElementById('messageInput');
 const sendButton = document.getElementById('sendButton');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
+const chatListContainer = document.getElementById('chatListContainer');
+const chatListElement = document.getElementById('chatList');
+const newChatButton = document.getElementById('newChatButton');
+const currentChatTitle = document.getElementById('currentChatTitle');
 
 // Initialize send button as disabled
 sendButton.disabled = true;
@@ -80,15 +135,17 @@ function connect() {
                 sendButton.disabled = false;
             }
             
-            // Send device identification
+            // Send device identification with current room
             ws.send(JSON.stringify({
                 type: 'register',
-                deviceId: deviceId
+                deviceId: deviceId,
+                roomName: currentRoom
             }));
             
-            // Request message history
+            // Request message history for current room
             ws.send(JSON.stringify({
-                type: 'getHistory'
+                type: 'getHistory',
+                roomName: currentRoom
             }));
         };
         
@@ -133,9 +190,15 @@ function connect() {
 // Handle incoming messages
 function handleMessage(data) {
     if (data.type === 'message') {
-        addMessage(data.message, data.deviceId !== deviceId);
-        saveMessageToLocal(data.message, data.deviceId !== deviceId);
+        // Only show message if it's for the current room
+        if (data.roomName === currentRoom) {
+            addMessage(data.message, data.deviceId !== deviceId);
+            saveMessageToLocal(data.message, data.deviceId !== deviceId, currentRoom);
+        }
     } else if (data.type === 'history') {
+        // Clear existing messages when history is received
+        chatMessages.innerHTML = '';
+        
         // Load message history
         if (data.messages && data.messages.length > 0) {
             data.messages.forEach(msg => {
@@ -143,7 +206,10 @@ function handleMessage(data) {
             });
         } else {
             // Try to load from localStorage
-            loadMessagesFromLocal();
+            loadMessagesFromLocal(currentRoom);
+            if (chatMessages.children.length === 0) {
+                showEmptyState();
+            }
         }
     }
 }
@@ -159,6 +225,7 @@ function sendMessage() {
         type: 'message',
         text: text,
         deviceId: deviceId,
+        roomName: currentRoom,
         timestamp: Date.now()
     };
     
@@ -167,7 +234,7 @@ function sendMessage() {
     
     // Add to UI immediately (optimistic update)
     addMessage(text, false);
-    saveMessageToLocal(text, false);
+    saveMessageToLocal(text, false, currentRoom);
     
     // Clear input
     messageInput.value = '';
@@ -218,26 +285,28 @@ function updateStatus(status, text) {
     statusText.textContent = text;
 }
 
-// Save message to localStorage
-function saveMessageToLocal(text, isReceived) {
-    const messages = JSON.parse(localStorage.getItem('messages') || '[]');
+// Save message to localStorage (per room)
+function saveMessageToLocal(text, isReceived, roomName) {
+    const storageKey = `messages_${roomName}`;
+    const messages = JSON.parse(localStorage.getItem(storageKey) || '[]');
     messages.push({
         text: text,
         deviceId: isReceived ? 'other' : deviceId,
         timestamp: Date.now()
     });
     
-    // Keep only last 100 messages
+    // Keep only last 100 messages per room
     if (messages.length > 100) {
         messages.shift();
     }
     
-    localStorage.setItem('messages', JSON.stringify(messages));
+    localStorage.setItem(storageKey, JSON.stringify(messages));
 }
 
-// Load messages from localStorage
-function loadMessagesFromLocal() {
-    const messages = JSON.parse(localStorage.getItem('messages') || '[]');
+// Load messages from localStorage (per room)
+function loadMessagesFromLocal(roomName) {
+    const storageKey = `messages_${roomName}`;
+    const messages = JSON.parse(localStorage.getItem(storageKey) || '[]');
     if (messages.length > 0) {
         messages.forEach(msg => {
             addMessage(msg.text, msg.deviceId !== deviceId, false);
@@ -246,6 +315,86 @@ function loadMessagesFromLocal() {
         showEmptyState();
     }
 }
+
+// Switch to a different chat
+function switchToChat(roomName) {
+    if (roomName === currentRoom) return;
+    
+    // Save current room
+    localStorage.setItem('currentRoom', roomName);
+    
+    // Update current room
+    currentRoom = roomName;
+    
+    // Update UI
+    currentChatTitle.textContent = roomName;
+    chatMessages.innerHTML = '';
+    
+    // Update chat list highlighting
+    renderChatList();
+    
+    // Join the new room on server
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: 'joinRoom',
+            roomName: roomName
+        }));
+    } else {
+        // If not connected, load from localStorage
+        loadMessagesFromLocal(roomName);
+        if (chatMessages.children.length === 0) {
+            showEmptyState();
+        }
+    }
+}
+
+// Render chat list
+function renderChatList() {
+    chatListElement.innerHTML = '';
+    
+    chatList.forEach(chatName => {
+        const chatItem = document.createElement('div');
+        chatItem.className = `chat-item ${chatName === currentRoom ? 'active' : ''}`;
+        chatItem.innerHTML = `
+            <span class="chat-item-name">${chatName}</span>
+            ${chatList.length > 1 ? '<button class="chat-item-delete" aria-label="Delete chat">×</button>' : ''}
+        `;
+        
+        chatItem.addEventListener('click', (e) => {
+            if (!e.target.classList.contains('chat-item-delete')) {
+                switchToChat(chatName);
+            }
+        });
+        
+        const deleteBtn = chatItem.querySelector('.chat-item-delete');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (confirm(`Delete "${chatName}"?`)) {
+                    removeChat(chatName);
+                }
+            });
+        }
+        
+        chatListElement.appendChild(chatItem);
+    });
+}
+
+// Handle new chat button
+newChatButton.addEventListener('click', () => {
+    const chatNumber = chatList.length + 1;
+    let newChatName = `Chat ${chatNumber}`;
+    
+    // Make sure name is unique
+    let counter = 1;
+    while (chatList.includes(newChatName)) {
+        newChatName = `Chat ${chatNumber + counter}`;
+        counter++;
+    }
+    
+    addChat(newChatName);
+    switchToChat(newChatName);
+});
 
 // Show empty state
 function showEmptyState() {
@@ -318,6 +467,13 @@ document.body.addEventListener('touchmove', (e) => {
     }
 }, { passive: false });
 
+// Initialize chat list
+loadChatList();
+renderChatList();
+
+// Set initial chat title
+currentChatTitle.textContent = currentRoom;
+
 // Initialize connection status
 updateStatus('disconnected', 'Connecting...');
 
@@ -327,7 +483,7 @@ connect();
 // Show empty state initially if no messages
 setTimeout(() => {
     if (chatMessages.children.length === 0) {
-        loadMessagesFromLocal();
+        loadMessagesFromLocal(currentRoom);
         if (chatMessages.children.length === 0) {
             showEmptyState();
         }

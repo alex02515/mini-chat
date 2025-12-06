@@ -6,36 +6,44 @@ const path = require('path');
 // Message storage file
 const MESSAGES_FILE = path.join(__dirname, 'messages.json');
 
-// Load messages from file
+// Load messages from file (per room)
 function loadMessages() {
     try {
         if (fs.existsSync(MESSAGES_FILE)) {
             const data = fs.readFileSync(MESSAGES_FILE, 'utf8');
-            return JSON.parse(data);
+            const parsed = JSON.parse(data);
+            // Support both old format (array) and new format (object with rooms)
+            if (Array.isArray(parsed)) {
+                // Migrate old format to new format
+                return { 'default': parsed };
+            }
+            return parsed;
         }
     } catch (error) {
         console.error('Error loading messages:', error);
     }
-    return [];
+    return {};
 }
 
 // Save messages to file
-function saveMessages(messages) {
+function saveMessages(messagesByRoom) {
     try {
-        fs.writeFileSync(MESSAGES_FILE, JSON.stringify(messages, null, 2));
+        fs.writeFileSync(MESSAGES_FILE, JSON.stringify(messagesByRoom, null, 2));
     } catch (error) {
         console.error('Error saving messages:', error);
     }
 }
 
-// Initialize messages array
-let messages = loadMessages();
+// Initialize messages storage (per room)
+let messagesByRoom = loadMessages();
 
-// Keep only last 200 messages in memory
-if (messages.length > 200) {
-    messages = messages.slice(-200);
-    saveMessages(messages);
-}
+// Clean up old messages (keep only last 200 per room)
+Object.keys(messagesByRoom).forEach(roomName => {
+    if (messagesByRoom[roomName].length > 200) {
+        messagesByRoom[roomName] = messagesByRoom[roomName].slice(-200);
+    }
+});
+saveMessages(messagesByRoom);
 
 // Create HTTP server to serve static files
 const server = http.createServer((req, res) => {
@@ -73,11 +81,12 @@ const server = http.createServer((req, res) => {
 // Create WebSocket server
 const wss = new WebSocket.Server({ server });
 
-// Store connected clients
+// Store connected clients: Map<deviceId, {ws, currentRoom}>
 const clients = new Map();
 
 wss.on('connection', (ws, req) => {
     let deviceId = null;
+    let currentRoom = 'default';
 
     ws.on('message', (data) => {
         try {
@@ -85,44 +94,74 @@ wss.on('connection', (ws, req) => {
 
             if (message.type === 'register') {
                 deviceId = message.deviceId;
-                clients.set(deviceId, ws);
-                console.log(`Device connected: ${deviceId}`);
-            } else if (message.type === 'getHistory') {
-                // Send message history
+                currentRoom = message.roomName || 'default';
+                clients.set(deviceId, { ws, currentRoom });
+                console.log(`Device connected: ${deviceId} to room: ${currentRoom}`);
+            } else if (message.type === 'joinRoom') {
+                // Client wants to switch rooms
+                const oldRoom = currentRoom;
+                currentRoom = message.roomName || 'default';
+                if (clients.has(deviceId)) {
+                    clients.get(deviceId).currentRoom = currentRoom;
+                }
+                console.log(`Device ${deviceId} switched from ${oldRoom} to ${currentRoom}`);
+                
+                // Send message history for the new room
+                const roomMessages = messagesByRoom[currentRoom] || [];
                 ws.send(JSON.stringify({
                     type: 'history',
-                    messages: messages.slice(-50) // Send last 50 messages
+                    roomName: currentRoom,
+                    messages: roomMessages.slice(-50) // Send last 50 messages
+                }));
+            } else if (message.type === 'getHistory') {
+                // Send message history for current room
+                const roomName = message.roomName || currentRoom;
+                const roomMessages = messagesByRoom[roomName] || [];
+                ws.send(JSON.stringify({
+                    type: 'history',
+                    roomName: roomName,
+                    messages: roomMessages.slice(-50) // Send last 50 messages
                 }));
             } else if (message.type === 'message') {
-                // Save message
+                // Save message to the room
+                const roomName = message.roomName || currentRoom;
+                
+                // Initialize room if it doesn't exist
+                if (!messagesByRoom[roomName]) {
+                    messagesByRoom[roomName] = [];
+                }
+                
                 const messageData = {
                     text: message.text,
                     deviceId: message.deviceId,
                     timestamp: message.timestamp || Date.now()
                 };
                 
-                messages.push(messageData);
+                messagesByRoom[roomName].push(messageData);
                 
-                // Keep only last 200 messages
-                if (messages.length > 200) {
-                    messages = messages.slice(-200);
+                // Keep only last 200 messages per room
+                if (messagesByRoom[roomName].length > 200) {
+                    messagesByRoom[roomName] = messagesByRoom[roomName].slice(-200);
                 }
                 
                 // Save to file
-                saveMessages(messages);
+                saveMessages(messagesByRoom);
 
-                // Broadcast to all other clients
+                // Broadcast to all other clients in the same room
                 clients.forEach((client, id) => {
-                    if (client !== ws && client.readyState === WebSocket.OPEN) {
-                        client.send(JSON.stringify({
+                    if (id !== deviceId && 
+                        client.currentRoom === roomName && 
+                        client.ws.readyState === WebSocket.OPEN) {
+                        client.ws.send(JSON.stringify({
                             type: 'message',
                             message: messageData.text,
-                            deviceId: message.deviceId
+                            deviceId: message.deviceId,
+                            roomName: roomName
                         }));
                     }
                 });
 
-                console.log(`Message from ${message.deviceId}: ${message.text}`);
+                console.log(`Message from ${message.deviceId} in room ${roomName}: ${message.text}`);
             }
         } catch (error) {
             console.error('Error handling message:', error);
